@@ -3,17 +3,60 @@
 #include "serialport_native.h"
 #include <stdio.h>   /* Standard input/output definitions */
 #include <string.h>  /* String function definitions */
-#include <unistd.h>  /* UNIX standard function definitions */
 #include <fcntl.h>   /* File control definitions */
 #include <errno.h>   /* Error number definitions */
+#ifndef _WIN32
+#include <unistd.h>  /* UNIX standard function definitions */
 #include <termios.h> /* POSIX terminal control definitions */
 #include <sys/ioctl.h>
+#else
+#include <Windows.h>
+#endif
 #include <node.h>    /* Includes for JS, node.js and v8 */
 #include <node_buffer.h>
 #include <v8.h>
 
 
 #define THROW_BAD_ARGS ThrowException(Exception::TypeError(String::New("Bad argument")))
+
+
+#ifdef _WIN32
+
+#define B0          0
+#define B50         50
+#define B75         75
+#define B110        110
+#define B134        134
+#define B150        150
+#define B200        200
+#define B300    CBR_300
+#define B600    CBR_600
+#define B1200   CBR_1200
+#define B1800       1800
+#define B2400   CBR_2400
+#define B4800   CBR_4800
+#define B9600   CBR_9600
+#define B19200  CBR_19200
+#define B38400  CBR_38400
+#define B57600  CBR_57600
+#define B115200 CBR_115200
+#define B230400     230400
+
+// TODO: Make sure that the following #define's have the correct values
+//       expected by the Win32 API.
+
+#define CS5 0x00000000
+#define CS6 0x00000100
+#define CS7 0x00000200
+#define CS8 0x00000300
+
+#define CSTOPB 0x00000400
+
+#define CCTS_OFLOW 0x00010000
+#define CRTSCTS    (CCTS_OFLOW | CRTS_IFLOW)
+#define CRTS_IFLOW 0x00020000
+
+#endif // _WIN32
 
 
 namespace node {
@@ -76,7 +119,9 @@ namespace node {
 
     long BAUD;
     long Baud_Rate = 38400;
+#ifndef _WIN32
     struct termios options; 
+#endif
 
     if (!args[0]->IsInt32())  {
       return scope.Close(THROW_BAD_ARGS);
@@ -91,17 +136,24 @@ namespace node {
     }
    
     // Set baud and other configuration.
+#ifndef _WIN32
     tcgetattr(fd, &options);
+#endif
 
     BAUD = GetBaudConstant(Baud_Rate);
     printf("Setting baud rate to %ld\n", BAUD);
 
     /* Specify the baud rate */
+#ifndef _WIN32
     cfsetispeed(&options, BAUD);
     cfsetospeed(&options, BAUD);
     
     tcflush(fd, TCIFLUSH);
     tcsetattr(fd, TCSANOW, &options);
+#else
+    fprintf(stdout, "Not Implemented on Windows");
+    // TODO: Implement Windows support.
+#endif
 
     return scope.Close(Integer::New(BAUD));
   }
@@ -121,11 +173,16 @@ namespace node {
     }
     bool DTR = args[1]->BooleanValue();
 
+#ifndef _WIN32
     if (DTR) { // DTR Set
       fcntl(fd, TIOCMBIS, TIOCM_DTR);
     } else { // DTR Clear
       fcntl(fd, TIOCMBIC, TIOCM_DTR);
     }
+#else
+    fprintf(stdout, "Not Implemented on Windows");
+    // TODO: Implement Windows support.
+#endif
 
     return scope.Close(Integer::New(1));
   }
@@ -151,10 +208,18 @@ namespace node {
     Local<Object> buffer_obj = args[1]->ToObject();
     char *buffer_data = Buffer::Data(buffer_obj);
     size_t buffer_length = Buffer::Length(buffer_obj);
+#ifndef _WIN32
     ssize_t bytes_read = read(fd, buffer_data, buffer_length);
+#else
+    DWORD dwRead = 0;
+    ReadFile((HANDLE)fd, buffer_data, buffer_length, &dwRead, NULL);
+    ssize_t bytes_read = dwRead;
+#endif
     if (bytes_read < 0) return ThrowException(ErrnoException(errno));
     // reset current pointer
+#ifndef _WIN32
     size_t seek_ret = lseek(fd,bytes_read,SEEK_CUR);
+#endif
     return scope.Close(Integer::New(bytes_read));
   }
 
@@ -179,7 +244,13 @@ namespace node {
     char *buffer_data = Buffer::Data(buffer_obj);
     size_t buffer_length = Buffer::Length(buffer_obj);
     
+#ifndef _WIN32
     int n = write(fd, buffer_data, buffer_length);
+#else
+    DWORD dwWrite = 0;
+    WriteFile((HANDLE)fd, buffer_data, buffer_length, &dwWrite, NULL);
+    int n = dwWrite;
+#endif
     return scope.Close(Integer::New(n));
 
   }
@@ -192,7 +263,12 @@ namespace node {
     }
     int fd = args[0]->Int32Value();
 
+#ifndef _WIN32
     close(fd);
+#else
+    fprintf(stdout, "Not Implemented on Windows");
+    // TODO: Implement Windows support.
+#endif
 
     return scope.Close(Integer::New(1));
   }
@@ -200,7 +276,9 @@ namespace node {
   static Handle<Value> Open(const Arguments& args) {
     HandleScope scope;
 
+#ifndef _WIN32
     struct termios options; 
+#endif
 
     long Baud_Rate = 38400;
     int Data_Bits = 8;
@@ -261,6 +339,7 @@ namespace node {
 
     String::Utf8Value path(args[0]->ToString());
     
+#ifndef _WIN32
     int flags = (O_RDWR | O_NOCTTY | O_NONBLOCK | O_NDELAY);
     int fd    = open(*path, flags);
 
@@ -337,6 +416,20 @@ namespace node {
 
       return scope.Close(Integer::New(fd));
     }
+#else
+	// TODO: Implement support for options and fully asynchronous (aka overlapped) I/O.
+    
+    HANDLE hComm;
+    hComm = CreateFile(*path, GENERIC_READ | GENERIC_WRITE, 
+                              0,
+                              0,
+                              OPEN_EXISTING,
+                              0, //FILE_FLAG_OVERLAPPED,
+                              0);
+    if (hComm == INVALID_HANDLE_VALUE) {
+    }
+    return scope.Close(Integer::New((int32_t)hComm));
+#endif
   }
 
 
@@ -357,14 +450,15 @@ namespace node {
 
 
   }
+}
 
 
-  extern "C" void
-  init (Handle<Object> target) 
+extern "C" {
+  void init (v8::Handle<v8::Object> target) 
   {
-    HandleScope scope;
-    SerialPort::Initialize(target);
+    v8::HandleScope scope;
+    node::SerialPort::Initialize(target);
   }
-
-
+  
+  NODE_MODULE(serialport_native, init);
 }

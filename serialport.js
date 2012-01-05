@@ -8,8 +8,15 @@ var Buffer     = require('buffer').Buffer;
 var stream     = require('stream');
 var fs         = require('fs');
 var net        = require('net');
-var serialport_native    = require('./serialport_native');
-var IOWatcher   = process.binding('io_watcher').IOWatcher;
+var serialport_native;
+if (process.platform != 'win32') {
+  serialport_native    = require('./serialport_native');
+} else {
+  // TODO: This is where gyp / Visual Studio outputs the build target.  Before
+  //       release, this require should be changed to point to an install path.
+  serialport_native    = require('./Default/serialport_native.node');
+}
+//var IOWatcher   = process.binding('io_watcher').IOWatcher;
 
 var BAUDRATES = [115200, 57600, 38400, 19200, 9600, 4800, 2400, 1800, 1200, 600, 300, 200, 150, 134, 110, 75, 50];
 var DATABITS  = [8, 7, 6, 5];
@@ -76,31 +83,36 @@ function SerialPort(path, options) {
   if (this.fd == -1) {
     throw new Error("Could not open serial port");
   } else {
-    this.readStream = fs.createReadStream(this.port,{bufferSize:options.buffersize});
-    var dataCallback = (function (me) {
-      return (function (buffer) {
-        options.parser(me, buffer)
-      });
-    })(this);
-    var errorCallback = (function (me) {
-      return (function (err) {
-        me.emit("error", err);
-      });
-    })(this);
-    var closeCallback = (function (me) {
-      return (function () {
-        me.emit("close");
-      });
-    })(this);
-    var endCallback = (function (me) {
-      return (function () {
-        me.emit("end");
-      });
-    })(this);
-    this.readStream.on("data", dataCallback);
-    this.readStream.on("error", errorCallback);
-    this.readStream.on("close", closeCallback);
-    this.readStream.on("end", endCallback);
+    if (process.platform != 'win32') {
+      this.readStream = fs.createReadStream(this.port,{bufferSize:options.buffersize});
+      var dataCallback = (function (me) {
+        return (function (buffer) {
+          options.parser(me, buffer)
+        });
+      })(this);
+      var errorCallback = (function (me) {
+        return (function (err) {
+          me.emit("error", err);
+        });
+      })(this);
+      var closeCallback = (function (me) {
+        return (function () {
+          me.emit("close");
+        });
+      })(this);
+      var endCallback = (function (me) {
+        return (function () {
+          me.emit("end");
+        });
+      })(this);
+      this.readStream.on("data", dataCallback);
+      this.readStream.on("error", errorCallback);
+      this.readStream.on("close", closeCallback);
+      this.readStream.on("end", endCallback);
+    } else {
+      // TODO: COM ports are unable to be opened via a file system path on
+      //       Windows.
+    }
   }
 }
 
@@ -114,6 +126,9 @@ SerialPort.prototype.close = function () {
   this.readStream.destroy();
 };
 
+SerialPort.prototype.read = function (b) {
+  serialport_native.read(this.fd, b);
+}
 
 SerialPort.prototype.write = function (b) { 
   if (Buffer.isBuffer(b))
