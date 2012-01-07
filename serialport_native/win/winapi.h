@@ -1,0 +1,20 @@
+#ifndef UV_SERIALPORT_WIN_WINAPI_H_
+#define UV_SERIALPORT_WIN_WINAPI_H_
+
+#ifndef STATUS_SUCCESS
+# define STATUS_SUCCESS ((NTSTATUS) 0x00000000L)
+#endif
+
+
+#ifndef FACILITY_NTWIN32
+# define FACILITY_NTWIN32 0x7
+#endif
+
+#ifdef NTSTATUS_FROM_WIN32
+# undef NTSTATUS_FROM_WIN32
+#endif
+#define NTSTATUS_FROM_WIN32(error) ((NTSTATUS) (error) <= 0 ? \
+        ((NTSTATUS) (error)) : ((NTSTATUS) (((error) & 0x0000FFFF) | \
+        (FACILITY_NTWIN32 << 16) | ERROR_SEVERITY_WARNING)))
+
+#endif /* UV_SERIALPORT_WIN_WINAPI_H_ */
