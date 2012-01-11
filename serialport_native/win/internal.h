@@ -6,6 +6,16 @@
 
 void uv_serialport_req_init(uv_loop_t* loop, uv_req_t* req);
 
+#define POST_COMPLETION_FOR_REQ(loop, req)                              \
+  if (!PostQueuedCompletionStatus((loop)->iocp,                         \
+                                  0,                                    \
+                                  0,                                    \
+                                  &((req)->overlapped))) {              \
+    uv_serialport_fatal_error(GetLastError(), "PostQueuedCompletionStatus");       \
+  }
+
+
+void uv_serialport_fatal_error(const int errorno, const char* syscall);
 uv_err_code uv_serialport_translate_sys_error(int sys_errno);
 void uv_serialport__set_error(uv_loop_t* loop, uv_err_code code, int sys_error);
 void uv_serialport__set_sys_error(uv_loop_t* loop, int sys_error);
