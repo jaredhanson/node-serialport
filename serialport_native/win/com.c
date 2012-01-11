@@ -185,6 +185,49 @@ void com__read(uv_fs_t* req, uv_file file, void *buf, size_t length,
   }
 }
 
+void com__write(uv_fs_t* req, uv_file file, void *buf, size_t length,
+    off_t offset) {
+  HANDLE handle;
+  OVERLAPPED overlapped, *overlapped_ptr;
+  LARGE_INTEGER offset_;
+  DWORD bytes;
+
+  VERIFY_UV_FILE(file, req);
+
+  // Attempting to associate a HANDLE to a communications resource (a.k.a.
+  // serial port) with a file descriptor using _open_osfhandle / _get_osfhandle
+  // causes a crash.  Because uv_fs_* functions do just that, they cannot be
+  // used here.
+  handle = (HANDLE) file;
+  if (handle == INVALID_HANDLE_VALUE) {
+    SET_REQ_RESULT(req, -1);
+    return;
+  }
+
+  if (length > INT_MAX) {
+    SET_REQ_ERROR(req, ERROR_INSUFFICIENT_BUFFER);
+    return;
+  }
+
+  if (offset != -1) {
+    memset(&overlapped, 0, sizeof overlapped);
+
+    offset_.QuadPart = offset;
+    overlapped.Offset = offset_.LowPart;
+    overlapped.OffsetHigh = offset_.HighPart;
+
+    overlapped_ptr = &overlapped;
+  } else {
+    overlapped_ptr = NULL;
+  }
+
+  if (WriteFile(handle, buf, length, &bytes, overlapped_ptr)) {
+    SET_REQ_RESULT(req, bytes);
+  } else {
+    SET_REQ_ERROR(req, GetLastError());
+  }
+}
+
 
 static DWORD WINAPI uv_com_thread_proc(void* parameter) {
   uv_fs_t* req = (uv_fs_t*) parameter;
@@ -209,15 +252,13 @@ static DWORD WINAPI uv_com_thread_proc(void* parameter) {
                (size_t) req->arg2,
                (off_t) req->arg3);
       break;
-    /*
     case UV_FS_WRITE:
-      fs__write(req,
+      com__write(req,
                 (uv_file)req->arg0,
                 req->arg1,
                 (size_t) req->arg2,
                 (off_t) req->arg3);
       break;
-    */
     default:
       assert(!"bad uv_fs_type");
   }
@@ -259,6 +300,22 @@ int uv_com_read(uv_loop_t* loop, uv_fs_t* req, uv_file file, void* buf,
   } else {
     uv_com_req_init_sync(loop, req, UV_FS_READ);
     com__read(req, file, buf, length, offset);
+    SET_UV_LAST_ERROR_FROM_REQ(req);
+    return req->result;
+  }
+
+  return 0;
+}
+
+int uv_com_write(uv_loop_t* loop, uv_fs_t* req, uv_file file, void* buf,
+    size_t length, off_t offset, uv_fs_cb cb) {
+  if (cb) {
+    uv_com_req_init_async(loop, req, UV_FS_WRITE, NULL, NULL, cb);
+    WRAP_REQ_ARGS4(req, file, buf, length, offset);
+    QUEUE_FS_TP_JOB(loop, req);
+  } else {
+    uv_com_req_init_sync(loop, req, UV_FS_WRITE);
+    com__write(req, file, buf, length, offset);
     SET_UV_LAST_ERROR_FROM_REQ(req);
     return req->result;
   }
