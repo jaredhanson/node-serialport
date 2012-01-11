@@ -4,7 +4,12 @@
       'target_name': 'serialport_native',
       'type': 'shared_library',
       'product_extension': 'node',
-      'sources': [ 'serialport_native/serialport_native.cc' ],
+      'sources': [ 'serialport_native/serialport_native.cc',
+                   'serialport_native/win/com.c',
+                   'serialport_native/win/common.c',
+                   'serialport_native/win/error.c',
+                   'serialport_native/win/req.c',
+                   'serialport_native/win/util.c' ],
       'include_dirs': [
 	      '<(NODE_ROOT)/src',
 		  '<(NODE_ROOT)/deps/v8/include',

@@ -6,6 +6,17 @@
 #define UV_FS_ASYNC_QUEUED       0x0001
 #define UV_FS_LAST_ERROR_SET     0x0020
 
+#define UTF8_TO_UTF16(s, t)                                                 \
+  size = uv_serialport_utf8_to_utf16(s, NULL, 0) * sizeof(wchar_t);                    \
+  t = (wchar_t*)malloc(size);                                               \
+  if (!t) {                                                                 \
+    uv_serialport_fatal_error(ERROR_OUTOFMEMORY, "malloc");                            \
+  }                                                                         \
+  if (!uv_serialport_utf8_to_utf16(s, t, size / sizeof(wchar_t))) {                    \
+    uv_serialport__set_sys_error(loop, GetLastError());                                \
+    return -1;                                                              \
+  }
+
 #define WRAP_REQ_ARGS1(req, a0)                                             \
   req->arg0 = (void*)a0;
 
@@ -38,12 +49,21 @@
     uv_serialport__set_error(req->loop, (uv_err_code)req->errorno, req->last_error);   \
   }
 
+#define SET_REQ_LAST_ERROR(req, error)                                      \
+  req->last_error = error;                                                  \
+  req->flags |= UV_FS_LAST_ERROR_SET;
+
 #define SET_REQ_RESULT(req, result_value)                                   \
   req->result = (result_value);                                             \
   if (req->result == -1) {                                                  \
     req->last_error = _doserrno;                                            \
     req->errorno = uv_serialport_translate_sys_error(req->last_error);                 \
   }
+
+#define SET_REQ_RESULT_WIN32_ERROR(req, sys_errno)                          \
+  req->result = -1;                                                         \
+  req->errorno = uv_serialport_translate_sys_error(sys_errno);                         \
+  SET_REQ_LAST_ERROR(req, sys_errno);
 
 #define VERIFY_UV_FILE(file, req)                                           \
   if (file == -1) {                                                         \
@@ -85,6 +105,42 @@ static void uv_com_req_init_sync(uv_loop_t* loop, uv_fs_t* req,
   req->errorno = 0;
 }
 
+
+void com__open(uv_fs_t* req, const wchar_t* path, int flags, int mode) {
+  DWORD access;
+  DWORD share;
+  DWORD disposition;
+  DWORD attributes;
+  HANDLE file;
+  int result;
+
+  access = GENERIC_READ | GENERIC_WRITE;
+  share = 0;
+  disposition = OPEN_EXISTING;
+  attributes = 0;
+  // TODO: Does FILE_FLAG_OVERLAPPED need to be set on attributes?
+  // attributes = FILE_FLAG_OVERLAPPED;
+
+  file = CreateFileW(path,
+                     access,
+                     share,
+                     NULL,
+                     disposition,
+                     attributes,
+                     NULL);
+
+  if (file == INVALID_HANDLE_VALUE) {
+    SET_REQ_RESULT_WIN32_ERROR(req, GetLastError());
+    return;
+  }
+  // Attempting to associate a HANDLE to a communications resource (a.k.a.
+  // serial port) with a file descriptor using _open_osfhandle / _get_osfhandle
+  // causes a crash.  Because uv_fs_* functions do just that, they cannot be
+  // used here.
+  result = (int) file;
+end:
+  SET_REQ_RESULT(req, result);
+}
 
 void com__read(uv_fs_t* req, uv_file file, void *buf, size_t length,
     off_t offset) {
@@ -138,10 +194,10 @@ static DWORD WINAPI uv_com_thread_proc(void* parameter) {
   assert(req->type == UV_FS);
 
   switch (req->fs_type) {
-    /*
     case UV_FS_OPEN:
-      fs__open(req, req->pathw, (int)req->arg0, (int)req->arg1);
+      com__open(req, req->pathw, (int)req->arg0, (int)req->arg1);
       break;
+    /*
     case UV_FS_CLOSE:
       fs__close(req, (uv_file)req->arg0);
       break;
@@ -167,6 +223,29 @@ static DWORD WINAPI uv_com_thread_proc(void* parameter) {
   }
 
   POST_COMPLETION_FOR_REQ(loop, req);
+
+  return 0;
+}
+
+int uv_com_open(uv_loop_t* loop, uv_fs_t* req, const char* path, int flags,
+    int mode, uv_fs_cb cb) {
+  wchar_t* pathw;
+  int size;
+
+  /* Convert to UTF16. */
+  UTF8_TO_UTF16(path, pathw);
+
+  if (cb) {
+    uv_com_req_init_async(loop, req, UV_FS_OPEN, path, pathw, cb);
+    WRAP_REQ_ARGS2(req, flags, mode);
+    QUEUE_FS_TP_JOB(loop, req);
+  } else {
+    uv_com_req_init_sync(loop, req, UV_FS_OPEN);
+    com__open(req, pathw, flags, mode);
+    free(pathw);
+    SET_UV_LAST_ERROR_FROM_REQ(req);
+    return req->result;
+  }
 
   return 0;
 }
