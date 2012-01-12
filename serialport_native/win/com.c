@@ -142,6 +142,20 @@ end:
   SET_REQ_RESULT(req, result);
 }
 
+void com__close(uv_fs_t* req, uv_file file) {
+  HANDLE handle;
+  int result;
+
+  VERIFY_UV_FILE(file, req);
+
+  handle = (HANDLE) file;
+  if (CloseHandle(handle)) {
+    SET_REQ_RESULT(req, 0);
+  } else {
+    SET_REQ_ERROR(req, GetLastError());
+  }
+}
+
 void com__read(uv_fs_t* req, uv_file file, void *buf, size_t length,
     off_t offset) {
   HANDLE handle;
@@ -240,11 +254,9 @@ static DWORD WINAPI uv_com_thread_proc(void* parameter) {
     case UV_FS_OPEN:
       com__open(req, req->pathw, (int)req->arg0, (int)req->arg1);
       break;
-    /*
     case UV_FS_CLOSE:
-      fs__close(req, (uv_file)req->arg0);
+      com__close(req, (uv_file)req->arg0);
       break;
-    */
     case UV_FS_READ:
       com__read(req,
                (uv_file) req->arg0,
@@ -284,6 +296,21 @@ int uv_com_open(uv_loop_t* loop, uv_fs_t* req, const char* path, int flags,
     uv_com_req_init_sync(loop, req, UV_FS_OPEN);
     com__open(req, pathw, flags, mode);
     free(pathw);
+    SET_UV_LAST_ERROR_FROM_REQ(req);
+    return req->result;
+  }
+
+  return 0;
+}
+
+int uv_com_close(uv_loop_t* loop, uv_fs_t* req, uv_file file, uv_fs_cb cb) {
+  if (cb) {
+    uv_com_req_init_async(loop, req, UV_FS_CLOSE, NULL, NULL, cb);
+    WRAP_REQ_ARGS1(req, file);
+    QUEUE_FS_TP_JOB(loop, req);
+  } else {
+    uv_com_req_init_sync(loop, req, UV_FS_CLOSE);
+    com__close(req, file);
     SET_UV_LAST_ERROR_FROM_REQ(req);
     return req->result;
   }
