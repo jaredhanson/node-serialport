@@ -298,6 +298,17 @@ struct fs_req_wrap {
 
 
 
+  /*
+   * Wrapper for read(2).
+   *
+   * bytesRead = serialport.read(fd, buffer, offset, length, position)
+   *
+   * 0 fd        integer. file descriptor
+   * 1 buffer    instance of Buffer
+   * 2 offset    integer. offset to start reading into inside buffer
+   * 3 length    integer. length to read
+   *
+   */
   static Handle<Value> Read(const Arguments& args) {
     HandleScope scope;
 
@@ -320,15 +331,20 @@ struct fs_req_wrap {
     char *buffer_data = Buffer::Data(buffer_obj);
     size_t buffer_length = Buffer::Length(buffer_obj);
     
-    len = args[2]->Int32Value();
-    if (len > buffer_length) {
+    size_t off = args[2]->Int32Value();
+    if (off >= buffer_length) {
+      return ThrowException(Exception::Error(
+            String::New("Offset is out of bounds")));
+    }
+    
+    len = args[3]->Int32Value();
+    if (off + len > buffer_length) {
       return ThrowException(Exception::Error(
                   String::New("Length extends beyond buffer")));
     }
     
-    // TODO: Put offset in
     buf = buffer_data;
-    cb = args[3];
+    cb = args[4];
     
 #ifndef _WIN32
     ssize_t bytes_read = read(fd, buffer_data, buffer_length);
