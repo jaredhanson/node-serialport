@@ -79,7 +79,7 @@ function SerialPort(path, options) {
   stream.Stream.call(this);
 
   this.port = path;
-  this.fd = serialport_native.open(this.port, options.baudrate, options.databits, options.stopbits, options.parity, options.flowcontrol);
+  this.fd = this.openSync(this.port, options);
   if (this.fd == -1) {
     throw new Error("Could not open serial port");
   } else {
@@ -119,6 +119,26 @@ function SerialPort(path, options) {
 util.inherits(SerialPort, stream.Stream);
 
 function noop() {}
+
+SerialPort.prototype.open = function (path, options, callback) {
+  options = options || {};
+  options.__proto__ = _options;
+  if (typeof(options) === 'function') {
+    callback = options;
+  }
+  if (typeof(callback) !== 'function') {
+    callback = noop;
+  }
+
+  serialport_native.open(path, options.baudrate, options.databits, options.stopbits, options.parity, options.flowcontrol, callback);
+};
+
+SerialPort.prototype.openSync = function (path, options) {
+  options = options || {};
+  options.__proto__ = _options;
+
+  return serialport_native.open(path, options.baudrate, options.databits, options.stopbits, options.parity, options.flowcontrol);
+};
 
 SerialPort.prototype.close = function (cb) {
   if (this.fd) {
