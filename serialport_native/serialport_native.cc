@@ -343,7 +343,7 @@ struct fs_req_wrap {
                   String::New("Length extends beyond buffer")));
     }
     
-    buf = buffer_data;
+    buf = buffer_data + off;
     cb = args[4];
     
 #ifndef _WIN32
@@ -372,6 +372,13 @@ struct fs_req_wrap {
 
 
 
+  // bytesWritten = write(fd, data, position, enc, callback)
+  // Wrapper for write(2).
+  //
+  // 0 fd        integer. file descriptor
+  // 1 buffer    the data to write
+  // 2 offset    where in the buffer to start from
+  // 3 length    how much to write
   static Handle<Value> Write(const Arguments& args) {
     HandleScope scope;
     
@@ -388,17 +395,28 @@ struct fs_req_wrap {
     char *buffer_data = Buffer::Data(buffer_obj);
     size_t buffer_length = Buffer::Length(buffer_obj);
     
-    Local<Value> cb = args[2];
+    size_t off = args[2]->Int32Value();
+    if (off >= buffer_length) {
+      return ThrowException(Exception::Error(
+            String::New("Offset is out of bounds")));
+    }
+    
+    ssize_t len = args[3]->Int32Value();
+    if (off + len > buffer_length) {
+      return ThrowException(Exception::Error(
+            String::New("Length is extends beyond buffer")));
+    }
+    
+    char * buf = (char*)buffer_data + off;
+    Local<Value> cb = args[4];
     
 #ifndef _WIN32
     int n = write(fd, buffer_data, buffer_length);
 #else
     if (cb->IsFunction()) {
-      //ASYNC_CALL(write, cb, fd, buf, len, pos)
-      ASYNC_CALL(write, cb, fd, buffer_data, buffer_length, 0)
+      ASYNC_CALL(write, cb, fd, buf, len, 0)
     } else {
-      //SYNC_CALL(write, 0, fd, buf, len, pos)
-      SYNC_CALL(write, 0, fd, buffer_data, buffer_length, -1)
+      SYNC_CALL(write, 0, fd, buf, len, -1)
       return scope.Close(Integer::New(SYNC_RESULT));
     }
     
