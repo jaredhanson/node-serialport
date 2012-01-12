@@ -118,23 +118,78 @@ function SerialPort(path, options) {
 
 util.inherits(SerialPort, stream.Stream);
 
-SerialPort.prototype.close = function () {
-  if (this.fd)  {
-    serialport_native.close(this.fd);
+function noop() {}
+
+SerialPort.prototype.close = function (cb) {
+  if (this.fd) {
+    serialport_native.close(this.fd, cb || noop);
     this.fd = null;
   }
-  this.readStream.destroy();
+  if (process.platform != 'win32') {
+    this.readStream.destroy();
+  }
 };
 
-SerialPort.prototype.read = function (b) {
-  serialport_native.read(this.fd, b);
+SerialPort.prototype.closeSync = function () {
+  var rv;
+  if (this.fd)  {
+    rv = serialport_native.close(this.fd);
+    this.fd = null;
+  }
+  if (process.platform != 'win32') {
+    this.readStream.destroy();
+  }
+  return rv;
+};
+
+SerialPort.prototype.read = function (buffer, offset, length, callback) {
+  function wrapper(err, bytesRead) {
+    // Retain a reference to buffer so that it can't be GC'ed too soon.
+    callback && callback(err, bytesRead || 0, buffer);
+  }
+
+  serialport_native.read(this.fd, buffer, offset, length, wrapper);
 }
 
-SerialPort.prototype.write = function (b) { 
-  if (Buffer.isBuffer(b))
-    serialport_native.write(this.fd, b);
-  else
-    serialport_native.write(this.fd, new Buffer(b));
+SerialPort.prototype.readSync = function (buffer, offset, length) {
+  return serialport_native.read(this.fd, buffer, offset, length);
+}
+
+SerialPort.prototype.write = function (buffer, offset, length, callback) {
+  if (!Buffer.isBuffer(buffer)) {
+    // string interface (data, encoding, callback)
+    var encoding = 'utf8';
+    if (typeof arguments[2] === 'function') {
+      callback = arguments[2];
+      encoding = arguments[1];
+    } else {
+      callback = arguments[1];
+    }
+    
+    buffer = new Buffer('' + arguments[0], encoding);
+    offset = 0;
+    length = buffer.length;
+  }
+
+  function wrapper(err, written) {
+    // Retain a reference to buffer so that it can't be GC'ed too soon.
+    callback && callback(err, written || 0, buffer);
+  }
+
+  serialport_native.write(this.fd, buffer, offset, length, wrapper);
+}
+
+SerialPort.prototype.writeSync = function (buffer, offset, length) {
+  if (!Buffer.isBuffer(buffer)) {
+    // string interface (data, encoding)
+
+    buffer = new Buffer('' + arguments[0], arguments[1]);
+    offset = 0;
+    length = buffer.length;
+  }
+  if (!length) return 0;
+
+  return serialport_native.write(this.fd, buffer, offset, length);
 };
 
 
