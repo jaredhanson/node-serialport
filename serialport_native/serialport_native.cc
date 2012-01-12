@@ -592,11 +592,16 @@ struct fs_req_wrap {
       return scope.Close(Integer::New(fd));
     }
 #else
-	// TODO: Implement support for options and fully asynchronous (aka overlapped) I/O.
-    //SYNC_CALL(open, *path, *path, flags, mode)
-    SYNC_CALL(open, *path, *path, 0, 0)
-    int fd = SYNC_RESULT;
-    return scope.Close(Integer::New(fd));
+    // TODO: Implement support for options.
+    if (args[6]->IsFunction()) {
+      //ASYNC_CALL(open, args[6], *path, flags, mode)
+      ASYNC_CALL(open, args[6], *path, 0, 0)
+    } else {
+      //SYNC_CALL(open, *path, *path, flags, mode)
+      SYNC_CALL(open, 0, *path, 0, 0)
+      int fd = SYNC_RESULT;
+      return scope.Close(Integer::New(fd));
+    }
 #endif
   }
 
