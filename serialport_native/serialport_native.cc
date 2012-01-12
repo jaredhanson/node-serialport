@@ -334,11 +334,11 @@ struct fs_req_wrap {
     ssize_t bytes_read = read(fd, buffer_data, buffer_length);
 #else
     if (cb->IsFunction()) {
-    	ASYNC_CALL(read, cb, fd, buf, len, 0);
+        ASYNC_CALL(read, cb, fd, buf, len, 0);
     } else {
-    	SYNC_CALL(read, 0, fd, buf, len, -1)
+        SYNC_CALL(read, 0, fd, buf, len, -1)
         Local<Integer> bytesRead = Integer::New(SYNC_RESULT);
-    	return scope.Close(bytesRead);
+        return scope.Close(bytesRead);
     }
     
     ssize_t bytes_read = 0;
