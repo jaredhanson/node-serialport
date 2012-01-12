@@ -10,10 +10,12 @@
 #include <termios.h> /* POSIX terminal control definitions */
 #include <sys/ioctl.h>
 #else
-#include <Windows.h>
+#include <windows.h>
+#include "win/com.h"
 #endif
 #include <node.h>    /* Includes for JS, node.js and v8 */
 #include <node_buffer.h>
+#include <req_wrap.h>
 #include <v8.h>
 
 
@@ -62,6 +64,113 @@
 namespace node {
 
   using namespace v8;
+
+
+typedef class ReqWrap<uv_fs_t> FSReqWrap;
+
+static Persistent<String> oncomplete_sym;
+
+
+static void After(uv_fs_t *req) {
+  HandleScope scope;
+
+  FSReqWrap* req_wrap = (FSReqWrap*) req->data;
+  assert(&req_wrap->req_ == req);
+  Local<Value> callback_v = req_wrap->object_->Get(oncomplete_sym);
+  assert(callback_v->IsFunction());
+  Local<Function> callback = Local<Function>::Cast(callback_v);
+
+  // there is always at least one argument. "error"
+  int argc = 1;
+
+  // Allocate space for two args. We may only use one depending on the case.
+  // (Feel free to increase this if you need more)
+  Local<Value> argv[2];
+
+  // NOTE: This may be needed to be changed if something returns a -1
+  // for a success, which is possible.
+  if (req->result == -1) {
+    // If the request doesn't have a path parameter set.
+
+    if (!req->path) {
+      argv[0] = UVException(req->errorno);
+    } else {
+      argv[0] = UVException(req->errorno,
+                            NULL,
+                            NULL,
+                            static_cast<const char*>(req->path));
+    }
+  } else {
+    // error value is empty or null for non-error.
+    argv[0] = Local<Value>::New(Null());
+
+    // All have at least two args now.
+    argc = 2;
+
+    switch (req->fs_type) {
+      case UV_FS_CLOSE:
+        argc = 1;
+        break;
+
+      case UV_FS_OPEN:
+        argv[1] = Integer::New(req->result);
+        break;
+
+      case UV_FS_WRITE:
+        argv[1] = Integer::New(req->result);
+        break;
+
+      case UV_FS_READ:
+        // Buffer interface
+        argv[1] = Integer::New(req->result);
+        break;
+
+      default:
+        assert(0 && "Unhandled eio response");
+    }
+  }
+
+  TryCatch try_catch;
+
+  callback->Call(req_wrap->object_, argc, argv);
+
+  if (try_catch.HasCaught()) {
+    FatalException(try_catch);
+  }
+
+  uv_fs_req_cleanup(&req_wrap->req_);
+  delete req_wrap;
+} 
+ 
+// This struct is only used on sync fs calls.
+// For async calls FSReqWrap is used.
+struct fs_req_wrap {
+  fs_req_wrap() {}
+  ~fs_req_wrap() { uv_fs_req_cleanup(&req); }
+  // Ensure that copy ctor and assignment operator are not used.
+  fs_req_wrap(const fs_req_wrap& req);
+  fs_req_wrap& operator=(const fs_req_wrap& req);
+  uv_fs_t req;
+};
+  
+#define ASYNC_CALL(func, callback, ...)                           \
+  FSReqWrap* req_wrap = new FSReqWrap();                          \
+  int r = uv_com_##func(uv_default_loop(), &req_wrap->req_,              \
+      __VA_ARGS__, After);                                        \
+  assert(r == 0);                                                 \
+  req_wrap->object_->Set(oncomplete_sym, callback);               \
+  req_wrap->Dispatched();                                         \
+  return scope.Close(req_wrap->object_);
+
+#define SYNC_CALL(func, path, ...)                                \
+  fs_req_wrap req_wrap;                                           \
+  int result = uv_com_##func(uv_default_loop(), &req_wrap.req, __VA_ARGS__, NULL); \
+  if (result < 0) {                                               \
+    int code = uv_last_error(uv_default_loop()).code;             \
+    return ThrowException(UVException(code, #func, "", path));    \
+  }
+  
+#define SYNC_RESULT result
   
   static Persistent<String> errno_symbol;
 
@@ -197,7 +306,9 @@ namespace node {
     }
     int fd = args[0]->Int32Value();
 
+	Local<Value> cb;
 
+    size_t len;
     char * buf = NULL;
 
     if (!Buffer::HasInstance(args[1])) {
@@ -208,12 +319,29 @@ namespace node {
     Local<Object> buffer_obj = args[1]->ToObject();
     char *buffer_data = Buffer::Data(buffer_obj);
     size_t buffer_length = Buffer::Length(buffer_obj);
+    
+    len = args[2]->Int32Value();
+    if (len > buffer_length) {
+      return ThrowException(Exception::Error(
+                  String::New("Length extends beyond buffer")));
+    }
+    
+    // TODO: Put offset in
+    buf = buffer_data;
+    cb = args[3];
+    
 #ifndef _WIN32
     ssize_t bytes_read = read(fd, buffer_data, buffer_length);
 #else
-    DWORD dwRead = 0;
-    ReadFile((HANDLE)fd, buffer_data, buffer_length, &dwRead, NULL);
-    ssize_t bytes_read = dwRead;
+    if (cb->IsFunction()) {
+    	ASYNC_CALL(read, cb, fd, buf, len, 0);
+    } else {
+    	SYNC_CALL(read, 0, fd, buf, len, -1)
+        Local<Integer> bytesRead = Integer::New(SYNC_RESULT);
+    	return scope.Close(bytesRead);
+    }
+    
+    ssize_t bytes_read = 0;
 #endif
     if (bytes_read < 0) return ThrowException(ErrnoException(errno));
     // reset current pointer
@@ -244,12 +372,21 @@ namespace node {
     char *buffer_data = Buffer::Data(buffer_obj);
     size_t buffer_length = Buffer::Length(buffer_obj);
     
+    Local<Value> cb = args[2];
+    
 #ifndef _WIN32
     int n = write(fd, buffer_data, buffer_length);
 #else
-    DWORD dwWrite = 0;
-    WriteFile((HANDLE)fd, buffer_data, buffer_length, &dwWrite, NULL);
-    int n = dwWrite;
+    if (cb->IsFunction()) {
+      //ASYNC_CALL(write, cb, fd, buf, len, pos)
+      ASYNC_CALL(write, cb, fd, buffer_data, buffer_length, 0)
+    } else {
+      //SYNC_CALL(write, 0, fd, buf, len, pos)
+      SYNC_CALL(write, 0, fd, buffer_data, buffer_length, -1)
+      return scope.Close(Integer::New(SYNC_RESULT));
+    }
+    
+    int n = 0;
 #endif
     return scope.Close(Integer::New(n));
 
@@ -266,8 +403,12 @@ namespace node {
 #ifndef _WIN32
     close(fd);
 #else
-    fprintf(stdout, "Not Implemented on Windows");
-    // TODO: Implement Windows support.
+    if (args[1]->IsFunction()) {
+      ASYNC_CALL(close, args[1], fd)
+    } else {
+      SYNC_CALL(close, 0, fd)
+      return Undefined();
+    }
 #endif
 
     return scope.Close(Integer::New(1));
@@ -418,17 +559,10 @@ namespace node {
     }
 #else
 	// TODO: Implement support for options and fully asynchronous (aka overlapped) I/O.
-    
-    HANDLE hComm;
-    hComm = CreateFile(*path, GENERIC_READ | GENERIC_WRITE, 
-                              0,
-                              0,
-                              OPEN_EXISTING,
-                              0, //FILE_FLAG_OVERLAPPED,
-                              0);
-    if (hComm == INVALID_HANDLE_VALUE) {
-    }
-    return scope.Close(Integer::New((int32_t)hComm));
+    //SYNC_CALL(open, *path, *path, flags, mode)
+    SYNC_CALL(open, *path, *path, 0, 0)
+    int fd = SYNC_RESULT;
+    return scope.Close(Integer::New(fd));
 #endif
   }
 
@@ -458,6 +592,8 @@ extern "C" {
   {
     v8::HandleScope scope;
     node::SerialPort::Initialize(target);
+    
+    node::oncomplete_sym = NODE_PSYMBOL("oncomplete");
   }
   
   NODE_MODULE(serialport_native, init);
