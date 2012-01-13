@@ -130,7 +130,12 @@ SerialPort.prototype.open = function (path, options, callback) {
     callback = noop;
   }
 
-  serialport_native.open(path, options.baudrate, options.databits, options.stopbits, options.parity, options.flowcontrol, callback);
+  var self = this;
+  serialport_native.open(path, options.baudrate, options.databits, options.stopbits, options.parity, options.flowcontrol, function(err, fd) {
+    if (err) { return callback(err); }
+    self.fd = fd;
+    callback(err, fd);
+  });
 };
 
 SerialPort.prototype.openSync = function (path, options) {
